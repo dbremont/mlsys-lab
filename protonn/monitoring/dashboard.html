@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neural Network Live Monitor</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root { 
+            --bg: #0f172a; --card: #1e293b; --text: #e2e8f0; 
+            --accent: #38bdf8; --success: #4ade80; --danger: #f87171; 
+            --btn-stop: #ef4444;
+        }
+        body { 
+            font-family: 'Segoe UI', system-ui, sans-serif; 
+            background: var(--bg); color: var(--text); 
+            margin: 0; padding: 20px; 
+            display: grid; grid-template-columns: 1fr 400px; gap: 20px; 
+            height: 100vh; box-sizing: border-box;
+        }
+        .card { 
+            background: var(--card); border-radius: 12px; padding: 20px; 
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3); display: flex; flex-direction: column;
+        }
+        h1, h2 { margin-top: 0; color: var(--accent); text-transform: uppercase; letter-spacing: 1px; font-size: 14px; }
+        h1 { font-size: 20px; margin-bottom: 5px; }
+        
+        .left-panel { display: flex; flex-direction: column; gap: 20px; }
+        .right-panel { display: flex; flex-direction: column; gap: 20px; overflow-y: auto; }
+        
+        .stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .stat-box { background: rgba(255,255,255,0.05); padding: 15px; border-radius: 8px; }
+        .stat-value { font-size: 24px; font-weight: bold; color: var(--text); font-family: monospace; }
+        .stat-label { font-size: 12px; color: #94a3b8; text-transform: uppercase; }
+        
+        .weight-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; font-family: monospace; font-size: 12px; }
+        .weight-item { background: rgba(0,0,0,0.2); padding: 8px; border-radius: 4px; text-align: center; }
+        .val-positive { color: var(--success); }
+        .val-negative { color: var(--danger); }
+
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+        th, td { text-align: center; padding: 8px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+        th { color: var(--accent); }
+        
+        .control-bar { 
+            display: flex; justify-content: space-between; align-items: center;
+            margin-top: 0; padding: 10px; border-radius: 6px; 
+            background: rgba(0,0,0,0.2); text-align: center; font-size: 12px;
+        }
+        .status-text { padding-left: 10px; font-weight: bold; }
+        .connected { color: var(--success); }
+        .disconnected { color: var(--danger); }
+        
+        .stop-btn {
+            background: var(--btn-stop);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            text-transform: uppercase;
+            font-size: 11px;
+            transition: opacity 0.2s;
+        }
+        .stop-btn:hover { opacity: 0.9; }
+        .stop-btn:disabled { background: #555; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+
+<div class="left-panel">
+    <div class="card">
+        <h1>XOR Neural Network Training</h1>
+        <div class="control-bar">
+            <div id="connection-status" class="status-text disconnected">
+                WAITING FOR STREAM...
+            </div>
+            <button id="stop-btn" class="stop-btn" onclick="stopTraining()" disabled>Stop Training</button>
+        </div>
+    </div>
+
+    <div class="card" style="flex-grow: 1; position: relative; padding-top: 40px;">
+        <h2 style="position: absolute; top: 20px; left: 20px;">Loss History</h2>
+        <canvas id="lossChart"></canvas>
+    </div>
+</div>
+
+<div class="right-panel">
+    <div class="card">
+        <h2>Current Status</h2>
+        <div class="stats-grid">
+            <div class="stat-box">
+                <div class="stat-label">Epoch</div>
+                <div class="stat-value" id="epoch-val">0</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Loss</div>
+                <div class="stat-value" id="loss-val">0.0000</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Network Parameters</h2>
+        <div class="weight-grid" id="weights-container">
+            <div class="weight-item">Waiting...</div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Live Predictions</h2>
+        <table>
+            <thead>
+                <tr><th>Input</th><th>Target</th><th>Prediction</th><th>Status</th></tr>
+            </thead>
+            <tbody id="pred-table">
+                <tr><td colspan="4">No data yet</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    // 1. Chart Setup - Dynamic Expansion
+    const ctx = document.getElementById('lossChart').getContext('2d');
+
+    // Initial range: 0 to 1000
+    let currentXMax = 1000; 
+
+    const lossChart = new Chart(ctx, {
+        type: 'scatter',
+        data: {
+            datasets: [{
+                label: 'Training Loss',
+                data: [], 
+                borderColor: '#38bdf8',
+                backgroundColor: '#38bdf8',
+                pointRadius: 3,       // Visible points
+                showLine: false,      // NO LINE
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,     // NO ANIMATION (Points appear instantly)
+            scales: {
+                x: {
+                    type: 'linear',
+                    position: 'bottom',
+                    min: 0,
+                    max: currentXMax,    // Dynamic Max
+                    title: { display: true, text: 'Epoch', color: '#94a3b8' },
+                    grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                    ticks: { color: '#94a3b8' }
+                },
+                y: { 
+                    beginAtZero: true,
+                    title: { display: true, text: 'Loss', color: '#94a3b8' },
+                    grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                    ticks: { color: '#94a3b8' }
+                }
+            },
+            plugins: { 
+                legend: { display: false }
+            }
+        }
+    });
+
+    // 2. SSE Connection
+    const statusDiv = document.getElementById('connection-status');
+    const stopBtn = document.getElementById('stop-btn');
+    let source;
+    
+    function connect() {
+        source = new EventSource('http://localhost:8000/stream');
+
+        source.onopen = () => {
+            statusDiv.className = 'status-text connected';
+            statusDiv.innerText = 'STREAM CONNECTED';
+            stopBtn.disabled = false;
+            stopBtn.innerText = "Stop Training";
+        };
+
+        source.onmessage = (e) => {
+            const data = JSON.parse(e.data);
+            updateDashboard(data);
+        };
+
+        source.onerror = () => {
+            statusDiv.className = 'status-text disconnected';
+            statusDiv.innerText = 'STREAM DISCONNECTED';
+            stopBtn.disabled = true;
+            source.close();
+        };
+    }
+
+    function stopTraining() {
+        fetch('http://localhost:8000/stop', { method: 'POST' })
+            .then(response => {
+                if(response.ok) {
+                    statusDiv.innerText = 'TRAINING STOPPED';
+                    statusDiv.className = 'status-text disconnected';
+                    stopBtn.disabled = true;
+                    stopBtn.innerText = "Stopped";
+                }
+            })
+            .catch(err => console.error("Stop failed", err));
+    }
+
+    // 3. Update Logic with Dynamic Axis
+    function updateDashboard(data) {
+        // Update Text Stats
+        document.getElementById('epoch-val').innerText = data.epoch;
+        document.getElementById('loss-val').innerText = data.loss.toFixed(6);
+
+        // Update Chart Data
+        lossChart.data.datasets[0].data.push({x: data.epoch, y: data.loss});
+
+        // Dynamic Axis Expansion Logic
+        // If current epoch approaches the max (leaving 100 buffer), expand by 1000
+        if (data.epoch > (currentXMax - 100)) {
+            currentXMax += 1000;
+            lossChart.options.scales.x.max = currentXMax;
+        }
+
+        lossChart.update();
+
+        // Update Weights
+        const wHtml = Object.entries(data.weights).map(([k, v]) => {
+            const cls = v >= 0 ? 'val-positive' : 'val-negative';
+            return `<div class="weight-item"><div style="color:#94a3b8">${k}</div><div class="${cls}">${v.toFixed(4)}</div></div>`;
+        }).join('');
+        document.getElementById('weights-container').innerHTML = wHtml;
+
+        // Update Predictions
+        const pHtml = data.predictions.map(p => {
+            const rounded = Math.round(p.output);
+            const isCorrect = rounded === p.target;
+            const cls = isCorrect ? 'correct' : 'wrong';
+            const statusText = isCorrect ? 'CORRECT' : 'WRONG';
+            return `<tr>
+                <td>[${p.input}]</td>
+                <td>${p.target}</td>
+                <td>${p.output.toFixed(4)}</td>
+                <td style="font-weight:bold" class="${cls}">${statusText}</td>
+            </tr>`;
+        }).join('');
+        document.getElementById('pred-table').innerHTML = pHtml;
+    }
+
+    connect();
+</script>
+</body>
+</html>
